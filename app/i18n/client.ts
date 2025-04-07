@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, } from 'react'
+import { useEffect, useCallback, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import i18next from 'i18next'
 import { initReactI18next, useTranslation as useTranslationOrg } from 'react-i18next'
 import resourcesToBackend from 'i18next-resources-to-backend'
@@ -10,12 +11,12 @@ import siteMetadata from '@/data/siteMetadata'
 const { fallbackLanguage: defaultLocale, languages: locales } = siteMetadata
 export const cookieName = 'i18next'
 
-const runsOnServerSide = typeof window === 'undefined'
-
 i18next
   .use(initReactI18next)
   .use(LanguageDetector)
-  .use(resourcesToBackend((language, namespace) => import(`./locales/${language}/${namespace}.json`)))
+  .use(resourcesToBackend((language, namespace) =>
+    import(`./locales/${language}/${namespace}.json`)
+  ))
   .init({
     supportedLngs: locales,
     fallbackLng: defaultLocale,
@@ -25,38 +26,59 @@ i18next
     ns: 'basic',
     detection: {
       order: ['path', 'htmlTag', 'cookie', 'navigator'],
+      caches: ['cookie'],
+      lookupCookie: cookieName
     },
-    preload: runsOnServerSide ? locales : []
+    interpolation: {
+      escapeValue: false
+    }
   })
-
-
 export function useTranslation(lng, ns, options = {}) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const [initialized, setInitialized] = useState(false)
+
   const ret = useTranslationOrg(ns, options)
   const { i18n } = ret
 
+  // 安全的语言切换函数
+  const changeLanguageSafe = useCallback(async (newLng) => {
+    if (i18n.resolvedLanguage === newLng) return
+
+    // 1. 先改变cookie
+    document.cookie = `${cookieName}=${newLng}; path=/; max-age=31536000; SameSite=Lax`
+
+    // 2. 等待语言切换完成
+    await i18n.changeLanguage(newLng)
+
+    // 3. 更新路由（如果需要）
+    const currentPath = pathname.replace(/^\/[a-z]{2}(\/|$)/, '/')
+    router.push(`/${newLng}${currentPath}`)
+  }, [i18n, pathname, router])
+
+  // 初始化语言状态
   useEffect(() => {
-    if (runsOnServerSide && lng && i18n.resolvedLanguage !== lng) {
-      i18n.changeLanguage(lng)
+    if (!initialized && lng && i18n.resolvedLanguage !== lng) {
+      changeLanguageSafe(lng).then(() => setInitialized(true))
     }
-  }, [lng, i18n])
+  }, [lng, i18n, initialized, changeLanguageSafe])
 
+  // 处理路由变化时的语言同步
   useEffect(() => {
-    if (!runsOnServerSide) {
-      const currentLanguage = i18n.resolvedLanguage
-      if (lng && currentLanguage !== lng) {
-        i18n.changeLanguage(lng)
-      }
-      // 使用原生 cookie 操作替代 react-cookie
-      const currentCookie = document.cookie
-        .split('; ')
-        .find(row => row.startsWith(`${cookieName}=`))
-        ?.split('=')[1]
-
-      if (lng && currentCookie !== lng) {
-        document.cookie = `${cookieName}=${lng}; path=/`
+    const handleRouteChange = () => {
+      const currentLng = pathname.split('/')[1]
+      if (locales.includes(currentLng) && currentLng !== i18n.resolvedLanguage) {
+        changeLanguageSafe(currentLng)
       }
     }
-  }, [lng, i18n])
 
-  return ret
+    handleRouteChange()
+    window.addEventListener('popstate', handleRouteChange)
+    return () => window.removeEventListener('popstate', handleRouteChange)
+  }, [pathname, i18n, changeLanguageSafe])
+
+  return {
+    ...ret,
+    changeLanguage: changeLanguageSafe // 暴露安全的语言切换方法
+  }
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { dir } from 'i18next'
+import LangSwitch from "@/components/LangSwitch";
 
 export const metadata: Metadata = {
   title: "Create Next App",
@@ -16,6 +17,7 @@ export default function RootLayout({
   return (
     <html lang={lng} dir={dir(lng)}>
       <body>
+        <LangSwitch />
         {children}
       </body>
     </html>
